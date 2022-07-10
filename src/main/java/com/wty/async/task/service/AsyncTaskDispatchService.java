@@ -3,6 +3,7 @@ package com.wty.async.task.service;
 
 import com.wty.async.task.data.AsyncTask;
 import com.wty.async.task.executor.IAsyncTaskExecutor;
+import com.wty.async.task.utils.ThreadUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,7 +50,7 @@ public class AsyncTaskDispatchService {
         });
         executorService.submit(() -> {
             log.info("start");
-            final long sleepTime = 400;
+            final long sleepTime = ThreadUtils.SLEEP_TIME_400MS;
             long sleepTimes = 0;
             // TODO: 创建执行器信息保存到数据库中
             while (running.get()) {
@@ -58,12 +59,12 @@ public class AsyncTaskDispatchService {
                     if (size <= 0) {
                         log.info("current thread name:{}", Thread.currentThread().getName());
                         // 防止出错时高频执行CPU打满
-                        if (sleepTimes <= 5) {
-                            Thread.sleep(sleepTime);
-                        } else if (sleepTimes <= 15) {
-                            Thread.sleep(1000L);
+                        if (sleepTimes <= ThreadUtils.SLEEP_TIMES_5) {
+                            ThreadUtils.sleep(sleepTime);
+                        } else if (sleepTimes <= ThreadUtils.SLEEP_TIMES_15) {
+                            ThreadUtils.sleep(ThreadUtils.SLEEP_TIME_1S);
                         } else {
-                            Thread.sleep(3000L);
+                            ThreadUtils.sleep(ThreadUtils.SLEEP_TIME_3S);
                         }
                         sleepTimes++;
                     } else {
@@ -71,11 +72,7 @@ public class AsyncTaskDispatchService {
                     }
                 } catch (Exception e) {
                     log.error("error", e);
-                    try {
-                        Thread.sleep(3000L);
-                    } catch (InterruptedException ex) {
-                        throw new RuntimeException(ex);
-                    }
+                    ThreadUtils.sleep(ThreadUtils.SLEEP_TIME_3S);
                 }
             }
         });
@@ -84,8 +81,16 @@ public class AsyncTaskDispatchService {
     public int doAsyncTaskDispatch() {
         // TODO:查数据库有哪些任务待执行，获取到具体执行器去执行
         IAsyncTaskExecutor asyncTaskExecutorDemo = executorMap.get("asyncTaskExecutorDemo");
-        asyncTaskExecutorDemo.checkReady(new AsyncTask());
-        asyncTaskExecutorDemo.execute(new AsyncTask());
+        AsyncTask asyncTask = new AsyncTask();
+        int checkReady = asyncTaskExecutorDemo.checkReady(asyncTask);
+        if (checkReady == 0){
+            boolean execute = asyncTaskExecutorDemo.execute(asyncTask);
+            if (execute) {
+                // TODO: 执行成功，修改数据库任务执行状态，任务结束，周期任务还可以执行下次任务
+            }else {
+                // TODO: 任务执行失败，需要重试策略：直接失败还是重试n次之后再失败
+            }
+        }
         return 0;
     }
 }
