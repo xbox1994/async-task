@@ -2,7 +2,9 @@ package com.wty.async.task.service;
 
 
 import com.wty.async.task.data.AsyncTask;
+import com.wty.async.task.domain.AsyncTaskConfig;
 import com.wty.async.task.executor.IAsyncTaskExecutor;
+import com.wty.async.task.mapper.AsyncTaskConfigMapper;
 import com.wty.async.task.utils.ThreadUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +30,8 @@ public class AsyncTaskDispatchService {
     private AtomicBoolean running = new AtomicBoolean(true);
     @Autowired
     private Map<String, IAsyncTaskExecutor> executorMap;
+    @Autowired
+    private AsyncTaskConfigMapper asyncTaskConfigMapper;
 
     @EventListener
     public void init(ContextRefreshedEvent event) {
@@ -42,6 +46,8 @@ public class AsyncTaskDispatchService {
 
 
         // TODO:从数据库中查询配置的线程数
+        AsyncTaskConfig asyncTaskConfig = asyncTaskConfigMapper.selectOne();
+        System.out.println(asyncTaskConfig);
         executorService = Executors.newFixedThreadPool(3, r -> {
             Thread t = Executors.defaultThreadFactory().newThread(r);
             t.setDaemon(true);
