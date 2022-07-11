@@ -2,9 +2,9 @@ package com.wty.async.task.service;
 
 
 import com.wty.async.task.data.AsyncTask;
-import com.wty.async.task.domain.AsyncTaskConfig;
+import com.wty.async.task.domain.AsyncTaskExecutorConfig;
 import com.wty.async.task.executor.IAsyncTaskExecutor;
-import com.wty.async.task.mapper.AsyncTaskConfigMapper;
+import com.wty.async.task.mapper.AsyncTaskExecutorConfigMapper;
 import com.wty.async.task.utils.ThreadUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 @Service
 public class AsyncTaskDispatchService {
+    public static final int POOL_SIZE = 10;
     @Value("${async.task.enable:false}")
     private Boolean enable;
     private String processName;
@@ -31,7 +32,7 @@ public class AsyncTaskDispatchService {
     @Autowired
     private Map<String, IAsyncTaskExecutor> executorMap;
     @Autowired
-    private AsyncTaskConfigMapper asyncTaskConfigMapper;
+    private AsyncTaskExecutorConfigMapper asyncTaskExecutorConfigMapper;
 
     @EventListener
     public void init(ContextRefreshedEvent event) {
@@ -45,10 +46,14 @@ public class AsyncTaskDispatchService {
         processName = String.format("%s:%s", host, timeStr);
 
 
-        // TODO:从数据库中查询配置的线程数
-        AsyncTaskConfig asyncTaskConfig = asyncTaskConfigMapper.selectOne();
-        System.out.println(asyncTaskConfig);
-        executorService = Executors.newFixedThreadPool(3, r -> {
+        int poolSize = POOL_SIZE;
+        System.out.println(getClass().getCanonicalName());
+        AsyncTaskExecutorConfig asyncTaskExecutorConfig = asyncTaskExecutorConfigMapper.selectByType(getClass().getCanonicalName());
+        if (asyncTaskExecutorConfig != null) {
+            poolSize = asyncTaskExecutorConfig.getParallelMax();
+        }
+
+        executorService = Executors.newFixedThreadPool(poolSize, r -> {
             Thread t = Executors.defaultThreadFactory().newThread(r);
             t.setDaemon(true);
             t.setName("AsyncTask-" + t.getId());
@@ -89,11 +94,11 @@ public class AsyncTaskDispatchService {
         IAsyncTaskExecutor asyncTaskExecutorDemo = executorMap.get("asyncTaskExecutorDemo");
         AsyncTask asyncTask = new AsyncTask();
         int checkReady = asyncTaskExecutorDemo.checkReady(asyncTask);
-        if (checkReady == 0){
+        if (checkReady == 0) {
             boolean execute = asyncTaskExecutorDemo.execute(asyncTask);
             if (execute) {
                 // TODO: 执行成功，修改数据库任务执行状态，任务结束，周期任务还可以执行下次任务
-            }else {
+            } else {
                 // TODO: 任务执行失败，需要重试策略：直接失败还是重试n次之后再失败
             }
         }
