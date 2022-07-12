@@ -15,9 +15,11 @@ import org.springframework.stereotype.Service;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
@@ -59,6 +61,13 @@ public class AsyncTaskDispatchService {
             t.setName("AsyncTask-" + t.getId());
             return t;
         });
+        run();
+    }
+
+    /**
+     * 第一层：提交死循环任务到线程池永久执行任务分配，直到标志位为false，停止循环
+     */
+    private void run() {
         executorService.submit(() -> {
             log.info("start");
             final long sleepTime = ThreadUtils.SLEEP_TIME_400MS;
@@ -89,19 +98,59 @@ public class AsyncTaskDispatchService {
         });
     }
 
+    /**
+     * 第二层：查询可执行的执行器，对每个执行器都尝试执行任务调度
+     *
+     * @return
+     */
     public int doAsyncTaskDispatch() {
-        // TODO:查数据库有哪些任务待执行，获取到具体执行器去执行
-        IAsyncTaskExecutor asyncTaskExecutorDemo = executorMap.get("asyncTaskExecutorDemo");
-        AsyncTask asyncTask = new AsyncTask();
-        int checkReady = asyncTaskExecutorDemo.checkReady(asyncTask);
-        if (checkReady == 0) {
-            boolean execute = asyncTaskExecutorDemo.execute(asyncTask);
-            if (execute) {
-                // TODO: 执行成功，修改数据库任务执行状态，任务结束，周期任务还可以执行下次任务
-            } else {
-                // TODO: 任务执行失败，需要重试策略：直接失败还是重试n次之后再失败
+        if (getIdleSize() > 0) {
+            List<AsyncTaskExecutorConfig> asyncTaskExecutorConfigs = asyncTaskExecutorConfigMapper.listForDispatch(System.currentTimeMillis());
+            int size = 0;
+            if (asyncTaskExecutorConfigs.isEmpty()) {
+                return size;
             }
+            for (AsyncTaskExecutorConfig asyncTaskExecutorConfig : asyncTaskExecutorConfigs) {
+                size += doAsyncTaskDispatch(asyncTaskExecutorConfig);
+            }
+            return size;
+        }
+        // 没有空闲的线程，不执行
+        return 0;
+    }
+
+    /**
+     * 第三层：单个执行器尝试执行任务
+     *
+     * @param asyncTaskExecutorConfig
+     * @return
+     */
+    private int doAsyncTaskDispatch(AsyncTaskExecutorConfig asyncTaskExecutorConfig) {
+        IAsyncTaskExecutor taskExecutor = executorMap.get(asyncTaskExecutorConfig.getType());
+        if (taskExecutor == null) {
+            log.info("没有找到该类型的执行器：{}", asyncTaskExecutorConfig.getType());
+        }
+        // 必须每次都判断一次，因为外层for循环会执行本方法多次
+        int idleSize = getIdleSize();
+        if (idleSize > 0) {
+            Long lastTime = asyncTaskExecutorConfig.getNextTime();
+            long nextTime = System.currentTimeMillis() - ThreadUtils.SLEEP_TIME_1M;
+            int lockCount = asyncTaskExecutorConfigMapper.lockConfig(asyncTaskExecutorConfig.getId(), lastTime, nextTime);
+            if (lockCount > 0) {
+                // TODO: fixAbnormal 异常任务
+                int max = Math.min(idleSize, asyncTaskExecutorConfig.getParallelMax() - asyncTaskExecutorConfig.getParallelCurrent());
+                if (max > 0){
+                    // 查询异步任务数据表，获取执行器类型对应的需要执行的任务数据
+
+                }
+            }
+
         }
         return 0;
+    }
+
+    private int getIdleSize() {
+        ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) executorService;
+        return threadPoolExecutor.getMaximumPoolSize() - threadPoolExecutor.getActiveCount();
     }
 }
