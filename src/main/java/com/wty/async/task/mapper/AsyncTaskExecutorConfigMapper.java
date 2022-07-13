@@ -20,5 +20,11 @@ public interface AsyncTaskExecutorConfigMapper extends BaseMapper<AsyncTaskExecu
 
     @Update("update async_task_executor_config set next_time = #{nextTime} where id = #{id} and next_time = #{lastTime} " +
             "and status = 1 and next_time > 0")
-    int lockConfig(Long id, Long lastTime, Long nextTime);
+    int updateConfigTime(Long id, Long lastTime, Long nextTime);
+
+    @Update("update async_task_executor_config set parallel_current = parallel_current + 1 where id = #{id}")
+    void updateForStartTask(Long id);
+
+    @Update("update async_task_executor_config set parallel_current = parallel_current - 1 where id = #{id}")
+    void updateForFinishTask(Long id);
 }
