@@ -124,7 +124,7 @@ public class AsyncTaskDispatchService {
     }
 
     /**
-     * 第三层：单个执行器尝试执行任务
+     * 第三层：单个执行器使用配置提交任务
      *
      * @param asyncTaskExecutorConfig
      * @return
@@ -145,32 +145,32 @@ public class AsyncTaskDispatchService {
 //            int lockCount = asyncTaskExecutorConfigMapper.updateConfigTime(asyncTaskExecutorConfig.getId(), lastTime, nextTime);
             log.info("正在执行的执行器id：{}", asyncTaskExecutorConfig.getId());
 //            if (lockCount > 0) {
-                // TODO: fixAbnormal 异常任务
-                int max = Math.min(idleSize, asyncTaskExecutorConfig.getParallelMax() - asyncTaskExecutorConfig.getParallelCurrent());
-                if (max > 0) {
-                    // 查询异步任务数据表，获取执行器类型对应的需要执行的任务数据
-                    List<AsyncTaskData> asyncTaskData = asyncTaskDataMapper.loadForExecuteByType(taskExecutor.getType().getCode(), System.currentTimeMillis(), max);
-                    for (AsyncTaskData data : asyncTaskData) {
-                        // 记录本次执行的任务id
-                        ids.add(data.getId());
-                        // 执行器的正在执行数量+1
-                        asyncTaskExecutorConfigMapper.updateForStartTask(asyncTaskExecutorConfig.getId());
-                        // 执行任务
-                        executorService.submit(() -> {
-                            try {
-                                doTask(data, taskExecutor, asyncTaskExecutorConfig);
-                            } catch (Exception e) {
-                                log.error("doTask", e);
-                            } finally {
-                                asyncTaskExecutorConfigMapper.updateForFinishTask(asyncTaskExecutorConfig.getId());
-                            }
-                        });
-                    }
+            // TODO: fixAbnormal 异常任务
+            int max = Math.min(idleSize, asyncTaskExecutorConfig.getParallelMax() - asyncTaskExecutorConfig.getParallelCurrent());
+            if (max > 0) {
+                // 查询异步任务数据表，获取执行器类型对应的需要执行的任务数据
+                List<AsyncTaskData> asyncTaskData = asyncTaskDataMapper.loadForExecuteByType(taskExecutor.getType().getCode(), System.currentTimeMillis(), max);
+                for (AsyncTaskData data : asyncTaskData) {
+                    // 记录本次执行的任务id
+                    ids.add(data.getId());
+                    // 执行器的正在执行数量+1
+                    asyncTaskExecutorConfigMapper.updateForStartTask(asyncTaskExecutorConfig.getId());
+                    // 执行任务
+                    executorService.submit(() -> {
+                        try {
+                            doTask(data, taskExecutor, asyncTaskExecutorConfig);
+                        } catch (Exception e) {
+                            log.error("doTask", e);
+                        } finally {
+                            asyncTaskExecutorConfigMapper.updateForFinishTask(asyncTaskExecutorConfig.getId());
+                        }
+                    });
                 }
-                asyncTaskExecutorConfigMapper.updateConfigTime(asyncTaskExecutorConfig.getId(), nextTime, System.currentTimeMillis());
-                if (ids.size() > 0) {
-                    log.info("doAsyncTaskDispatch done: {}, {}, {}", asyncTaskExecutorConfig.getType(), ids, getIdleSize());
-                }
+            }
+            asyncTaskExecutorConfigMapper.updateConfigTime(asyncTaskExecutorConfig.getId(), nextTime, System.currentTimeMillis());
+            if (ids.size() > 0) {
+                log.info("doAsyncTaskDispatch done: {}, {}, {}", asyncTaskExecutorConfig.getType(), ids, getIdleSize());
+            }
 //            }
 
         }
@@ -178,13 +178,29 @@ public class AsyncTaskDispatchService {
     }
 
     /**
-     * 第四层：执行任务
+     * 第四层：锁定单条任务记录并执行任务
+     *
      * @param data
      * @param taskExecutor
      * @param asyncTaskExecutorConfig
      */
     private void doTask(AsyncTaskData data, IAsyncTaskExecutor taskExecutor, AsyncTaskExecutorConfig asyncTaskExecutorConfig) {
-
+        String executorName = String.format("%s:%s:%s", taskExecutor.getType().getDesc(), processName, Thread.currentThread().getName());
+        long startTime = System.currentTimeMillis();
+        int cnt = asyncTaskDataMapper.lockForExecute(data.getId(), startTime, data.getUpdateTIme(), executorName);
+        if (cnt > 0) {
+            data.setStartTime(startTime);
+            try {
+                // 每次执行时插入正在执行的执行器信息
+                // 转换执行器任务部分数据为任务执行数据
+                // 设置traceId为一个新的traceId
+                // 执行执行器的checkReady方法，当ready之后执行execute方法，否则等待n秒后执行
+                // 如果任务执行异常，设置任务数据的状态和结束时间
+                // 最终执行：保存任务数据到数据库、删除正在执行的执行器信息、移除当前设置的traceId
+            } catch (Exception e) {
+                log.error("doTask: {}, {}, {}", data.getId(), executorName, e.getMessage());
+            }
+        }
     }
 
     private int getIdleSize() {
