@@ -15,7 +15,7 @@ public interface AsyncTaskDataMapper extends BaseMapper<AsyncTaskData> {
             "limit #{max}")
     List<AsyncTaskData> loadForExecuteByType(int type, long currentTime, int max);
 
-    @Update("update async_task_data set executor = #{executor}, execute_count = execute_count + 1, status = 2, start_time = #{startTime} " +
+    @Update("update async_task_data set executor = #{executor}, execute_count = execute_count + 1, status = 2, start_time = #{startTime}, " +
             "update_time = #{startTime} where id = #{id} and update_time = #{updateTime}")
-    int lockForExecute(Long id, long startTime, long updateTime, String executorName);
+    int lockForExecute(Long id, long startTime, long updateTime, String executor);
 }

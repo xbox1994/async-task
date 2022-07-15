@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class AsyncTaskData {
     private Long id;
-    private String type; // 执行器类型
+    private Integer type; // 执行器类型
     private Long bizId; // 业务id
     private String bizData; // 业务数据
     private Integer status; // 执行状态
@@ -17,6 +17,6 @@ public class AsyncTaskData {
     private String traceId; // 执行记录traceId
     private String creator; // 任务创建人
     private Long createTime; // 任务创建时间
-    private Long updateTIme; // 任务更新时间
+    private Long updateTime; // 任务更新时间
 
 }

@@ -1,13 +1,18 @@
 package com.wty.async.task.service;
 
 
+import com.wty.async.task.data.AsyncTask;
 import com.wty.async.task.domain.AsyncTaskData;
+import com.wty.async.task.domain.AsyncTaskExecutor;
 import com.wty.async.task.domain.AsyncTaskExecutorConfig;
+import com.wty.async.task.enums.AsyncTaskStatusEnum;
 import com.wty.async.task.executor.IAsyncTaskExecutor;
 import com.wty.async.task.mapper.AsyncTaskDataMapper;
 import com.wty.async.task.mapper.AsyncTaskExecutorConfigMapper;
+import com.wty.async.task.mapper.AsyncTaskExecutorMapper;
 import com.wty.async.task.utils.ThreadUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.ContextRefreshedEvent;
@@ -37,6 +42,8 @@ public class AsyncTaskDispatchService {
     private Map<String, IAsyncTaskExecutor> executorMap;
     @Autowired
     private AsyncTaskExecutorConfigMapper asyncTaskExecutorConfigMapper;
+    @Autowired
+    private AsyncTaskExecutorMapper asyncTaskExecutorMapper;
     @Autowired
     private AsyncTaskDataMapper asyncTaskDataMapper;
 
@@ -187,18 +194,74 @@ public class AsyncTaskDispatchService {
     private void doTask(AsyncTaskData data, IAsyncTaskExecutor taskExecutor, AsyncTaskExecutorConfig asyncTaskExecutorConfig) {
         String executorName = String.format("%s:%s:%s", taskExecutor.getType().getDesc(), processName, Thread.currentThread().getName());
         long startTime = System.currentTimeMillis();
-        int cnt = asyncTaskDataMapper.lockForExecute(data.getId(), startTime, data.getUpdateTIme(), executorName);
+        Long taskId = data.getId();
+        int cnt = asyncTaskDataMapper.lockForExecute(taskId, startTime, data.getUpdateTime(), executorName);
         if (cnt > 0) {
             data.setStartTime(startTime);
+            data.setUpdateTime(startTime);
+            data.setStatus(AsyncTaskStatusEnum.RUNNING.getCode());
+            data.setExecutor(executorName);
+            data.setExecuteCount(data.getExecuteCount() + 1);
+            // 每次执行时插入正在执行的执行器信息
+            AsyncTaskExecutor asyncTaskExecutor = asyncTaskExecutorMapper.selectByExecutor(executorName);
+            if (asyncTaskExecutor != null) {
+                asyncTaskExecutor.setTaskId(taskId);
+                asyncTaskExecutor.setUpdateTime(System.currentTimeMillis());
+                asyncTaskExecutorMapper.updateById(asyncTaskExecutor);
+            } else {
+                asyncTaskExecutor = new AsyncTaskExecutor();
+                asyncTaskExecutor.setExecutor(executorName);
+                asyncTaskExecutor.setTaskId(taskId);
+                asyncTaskExecutor.setCreateTime(System.currentTimeMillis());
+                asyncTaskExecutor.setUpdateTime(asyncTaskExecutor.getCreateTime());
+                asyncTaskExecutorMapper.insert(asyncTaskExecutor);
+            }
             try {
-                // 每次执行时插入正在执行的执行器信息
                 // 转换执行器任务部分数据为任务执行数据
+                AsyncTask asyncTask = new AsyncTask();
+                asyncTask.setExecuteCount(data.getExecuteCount());
+                asyncTask.setPlanTime(data.getPlanTime());
+                asyncTask.setStartTime(data.getStartTime());
+                asyncTask.setBizId(data.getBizId());
+                asyncTask.setBizData(data.getBizData());
                 // 设置traceId为一个新的traceId
+                MDC.put("traceId", data.getTraceId());
                 // 执行执行器的checkReady方法，当ready之后执行execute方法，否则等待n秒后执行
-                // 如果任务执行异常，设置任务数据的状态和结束时间
-                // 最终执行：保存任务数据到数据库、删除正在执行的执行器信息、移除当前设置的traceId
+                int checkReady = taskExecutor.checkReady(asyncTask);
+                if (checkReady == 0) {
+                    boolean success = taskExecutor.execute(asyncTask);
+                    data.setStatus(success ? AsyncTaskStatusEnum.SUCCESS.getCode() : AsyncTaskStatusEnum.FAIL.getCode());
+                    data.setEndTime(System.currentTimeMillis());
+                    log.info("执行:{}, {}", success, data);
+                } else if (checkReady > 0) {
+                    data.setStatus(AsyncTaskStatusEnum.READY.getCode());
+                    data.setStartTime(0L);
+                    data.setEndTime(0L);
+                    data.setExecutor("");
+                    // 执行到这里的任务的当前事件肯定是大于原来的计划时间，查出来的
+                    data.setPlanTime(System.currentTimeMillis() + checkReady * ThreadUtils.SLEEP_TIME_1S);
+                    if (data.getExecuteCount() >= taskExecutor.maxExecuteCount()) {
+                        // 任务最大执行次数，超过次数后会失败且报警
+                        log.warn("任务最大执行次数，超过次数后会失败且报警: {}", data);
+                    } else {
+                        log.info("准备下次执行:{}", data);
+                    }
+                } else {
+                    data.setStatus(AsyncTaskStatusEnum.CANCEL.getCode());
+                    data.setEndTime(System.currentTimeMillis());
+                    log.info("取消执行:{}", data);
+                }
             } catch (Exception e) {
-                log.error("doTask: {}, {}, {}", data.getId(), executorName, e.getMessage());
+                // 如果任务执行异常，设置任务数据的状态和结束时间
+                data.setStatus(AsyncTaskStatusEnum.FAIL.getCode());
+                data.setEndTime(System.currentTimeMillis());
+                log.error("任务执行异常: {}, {}", data, e.getMessage());
+            } finally {
+                // 最终执行：保存任务数据到数据库、删除正在执行的执行器信息、移除当前设置的traceId
+                asyncTaskDataMapper.updateById(data);
+                asyncTaskExecutorMapper.deleteById(asyncTaskExecutor.getId());
+                MDC.remove("traceId");
+                log.info("任务执行结束处理完成:{}", data);
             }
         }
     }
