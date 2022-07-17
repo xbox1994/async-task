@@ -83,7 +83,22 @@ public class AsyncTaskDispatchService {
             log.info("start");
             final long sleepTime = ThreadUtils.SLEEP_TIME_400MS;
             long sleepTimes = 0;
-            // TODO: 创建执行器信息保存到数据库中
+            // 创建当前执行器信息保存到数据库中，用-1作为特殊标识出当前执行器
+            AsyncTaskExecutor asyncTaskExecutor = asyncTaskExecutorMapper.selectByExecutor(processName);
+            if (asyncTaskExecutor != null) {
+                asyncTaskExecutor.setTaskId(-1L);
+                asyncTaskExecutor.setUpdateTime(System.currentTimeMillis());
+                asyncTaskExecutorMapper.updateById(asyncTaskExecutor);
+            } else {
+                asyncTaskExecutor = new AsyncTaskExecutor();
+                asyncTaskExecutor.setExecutor(processName);
+                asyncTaskExecutor.setCreateTime(System.currentTimeMillis());
+                asyncTaskExecutor.setUpdateTime(asyncTaskExecutor.getCreateTime());
+                asyncTaskExecutor.setTaskId(-1L);
+                asyncTaskExecutorMapper.insert(asyncTaskExecutor);
+            }
+
+            // 执行死循环调度，直到服务接收到退出消息，TODO IServiceClose接口
             while (running.get()) {
                 try {
                     int size = doAsyncTaskDispatch();
@@ -144,6 +159,7 @@ public class AsyncTaskDispatchService {
         }
         // 必须每次都判断一次，因为外层for循环会执行本方法多次
         int idleSize = getIdleSize();
+        int abnormalSize = 0;
         List<Long> ids = new ArrayList<>();
         if (idleSize > 0) {
             Long lastTime = asyncTaskExecutorConfig.getNextTime();
@@ -152,7 +168,8 @@ public class AsyncTaskDispatchService {
 //            int lockCount = asyncTaskExecutorConfigMapper.updateConfigTime(asyncTaskExecutorConfig.getId(), lastTime, nextTime);
             log.info("正在执行的执行器id：{}", asyncTaskExecutorConfig.getId());
 //            if (lockCount > 0) {
-            // TODO: fixAbnormal 异常任务
+            // 因服务重启导致的异常任务处理，如果有重新调度的需要算到当前调度的数量中
+            abnormalSize = fixAbnormal(asyncTaskExecutorConfig.getId(), taskExecutor);
             int max = Math.min(idleSize, asyncTaskExecutorConfig.getParallelMax() - asyncTaskExecutorConfig.getParallelCurrent());
             if (max > 0) {
                 // 查询异步任务数据表，获取执行器类型对应的需要执行的任务数据
@@ -165,7 +182,7 @@ public class AsyncTaskDispatchService {
                     // 执行任务
                     executorService.submit(() -> {
                         try {
-                            doTask(data, taskExecutor, asyncTaskExecutorConfig);
+                            doTask(data, taskExecutor);
                         } catch (Exception e) {
                             log.error("doTask", e);
                         } finally {
@@ -181,7 +198,55 @@ public class AsyncTaskDispatchService {
 //            }
 
         }
-        return ids.size();
+        return ids.size() + abnormalSize;
+    }
+
+    private int fixAbnormal(Long id, IAsyncTaskExecutor taskExecutor) {
+        List<AsyncTaskExecutor> asyncTaskExecutors = asyncTaskExecutorMapper.listAll();
+        if (asyncTaskExecutors.isEmpty()) {
+            return 0;
+        }
+        List<AsyncTaskExecutor> currentAsyncTaskExecutor = new ArrayList<>();
+        List<String> activeExecutors = new ArrayList<>();
+        for (AsyncTaskExecutor asyncTaskExecutor : asyncTaskExecutors) {
+            if (asyncTaskExecutor.getTaskId() == null) {
+                continue;
+            }
+            if (asyncTaskExecutor.getTaskId() > 0) {
+                if (asyncTaskExecutor.getExecutor().startsWith(taskExecutor.getType().name() + ":")) {
+                    currentAsyncTaskExecutor.add(asyncTaskExecutor);
+                }
+            } else {
+                activeExecutors.add(asyncTaskExecutor.getExecutor());
+            }
+        }
+        if (currentAsyncTaskExecutor.isEmpty()) {
+            return 0;
+        }
+        int size = 0;
+        // 查所有在执行的任务，如果有任务不是运行中的节点执行的，则是异常任务，需要重新调度
+        for (AsyncTaskExecutor asyncTaskExecutor : currentAsyncTaskExecutor) {
+            if (activeExecutors.stream().noneMatch(e -> e.contains(asyncTaskExecutor.getExecutor()))) {
+                continue;
+            }
+            log.warn("重新调度执行异常任务：{}", asyncTaskExecutor);
+            AsyncTaskData asyncTaskData = asyncTaskDataMapper.selectById(asyncTaskExecutor.getTaskId());
+            if (asyncTaskData != null && asyncTaskData.getStatus() == AsyncTaskStatusEnum.RUNNING.getCode()) {
+                // 异常任务还在执行中，则需要调度
+                executorService.submit(() -> {
+                    try {
+                        doTask(asyncTaskData, taskExecutor);
+                    } catch (Exception e) {
+                        log.error("重新调度异常任务失败", e);
+                    } finally {
+                        asyncTaskExecutorConfigMapper.updateForFinishTask(id);
+                    }
+                });
+                size++;
+            }
+            asyncTaskExecutorMapper.deleteById(asyncTaskExecutor.getId());
+        }
+        return size;
     }
 
     /**
@@ -189,9 +254,8 @@ public class AsyncTaskDispatchService {
      *
      * @param data
      * @param taskExecutor
-     * @param asyncTaskExecutorConfig
      */
-    private void doTask(AsyncTaskData data, IAsyncTaskExecutor taskExecutor, AsyncTaskExecutorConfig asyncTaskExecutorConfig) {
+    private void doTask(AsyncTaskData data, IAsyncTaskExecutor taskExecutor) {
         String executorName = String.format("%s:%s:%s", taskExecutor.getType().getDesc(), processName, Thread.currentThread().getName());
         long startTime = System.currentTimeMillis();
         Long taskId = data.getId();

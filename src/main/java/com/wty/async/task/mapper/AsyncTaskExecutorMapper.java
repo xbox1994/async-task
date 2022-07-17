@@ -13,4 +13,7 @@ import java.util.List;
 public interface AsyncTaskExecutorMapper extends BaseMapper<AsyncTaskExecutor> {
     @Select("select * from async_task_executor where executor = #{executor}")
     AsyncTaskExecutor selectByExecutor(String executorName);
+
+    @Select("select * from async_task_executor")
+    List<AsyncTaskExecutor> listAll();
 }
