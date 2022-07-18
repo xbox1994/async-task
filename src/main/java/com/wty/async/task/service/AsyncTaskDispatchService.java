@@ -1,6 +1,7 @@
 package com.wty.async.task.service;
 
 
+import com.wty.async.task.config.IServiceClose;
 import com.wty.async.task.data.AsyncTask;
 import com.wty.async.task.domain.AsyncTaskData;
 import com.wty.async.task.domain.AsyncTaskExecutor;
@@ -31,13 +32,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
-public class AsyncTaskDispatchService {
+public class AsyncTaskDispatchService implements IServiceClose {
     public static final int POOL_SIZE = 10;
     @Value("${async.task.enable:false}")
     private Boolean enable;
     private String processName;
     private ExecutorService executorService;
     private AtomicBoolean running = new AtomicBoolean(true);
+    private AtomicBoolean stopped = new AtomicBoolean(false);
     @Autowired
     private Map<String, IAsyncTaskExecutor> executorMap;
     @Autowired
@@ -98,7 +100,7 @@ public class AsyncTaskDispatchService {
                 asyncTaskExecutorMapper.insert(asyncTaskExecutor);
             }
 
-            // 执行死循环调度，直到服务接收到退出消息，TODO IServiceClose接口
+            // 执行死循环调度，直到服务接收到退出消息，IServiceClose接口
             while (running.get()) {
                 try {
                     int size = doAsyncTaskDispatch();
@@ -116,11 +118,15 @@ public class AsyncTaskDispatchService {
                     } else {
                         sleepTimes = 0;
                     }
+                    asyncTaskExecutor.setUpdateTime(System.currentTimeMillis());
+                    asyncTaskExecutorMapper.updateById(asyncTaskExecutor);
                 } catch (Exception e) {
                     log.error("error", e);
                     ThreadUtils.sleep(ThreadUtils.SLEEP_TIME_3S);
                 }
             }
+            log.info("异步执行器调度停止");
+            stopped.set(true);
         });
     }
 
@@ -333,5 +339,24 @@ public class AsyncTaskDispatchService {
     private int getIdleSize() {
         ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) executorService;
         return threadPoolExecutor.getMaximumPoolSize() - threadPoolExecutor.getActiveCount();
+    }
+
+    private int getActiveCount() {
+        ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) executorService;
+        return threadPoolExecutor.getActiveCount();
+    }
+
+    @Override
+    public void close() {
+        if (running != null) {
+            running.set(false);
+        }
+        if (executorService != null) {
+            while (!stopped.get() || getActiveCount() > 0) {
+                ThreadUtils.sleep(ThreadUtils.SLEEP_TIME_3S);
+            }
+            executorService.shutdown();
+        }
+        log.info("异步执行器调度完全结束");
     }
 }
