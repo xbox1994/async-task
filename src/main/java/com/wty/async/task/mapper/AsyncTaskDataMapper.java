@@ -18,4 +18,7 @@ public interface AsyncTaskDataMapper extends BaseMapper<AsyncTaskData> {
     @Update("update async_task_data set executor = #{executor}, execute_count = execute_count + 1, status = 2, start_time = #{startTime}, " +
             "update_time = #{startTime} where id = #{id} and update_time = #{updateTime}")
     int lockForExecute(Long id, long startTime, long updateTime, String executor);
+
+    @Select("select async_task_data where biz_id = #{bizId}")
+    AsyncTaskData selectByBizId(Long bizId);
 }

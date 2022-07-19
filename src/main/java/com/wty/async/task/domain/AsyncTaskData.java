@@ -7,7 +7,8 @@ public class AsyncTaskData {
     private Long id;
     private Integer type; // 执行器类型
     private Long bizId; // 业务id
-    private String bizData; // 业务数据
+    private String bizData; // 业务参数
+    private String result; // 执行结果
     private Integer status; // 执行状态
     private Long planTime; // 计划执行时间
     private Long startTime; // 最近一次执行开始时间
